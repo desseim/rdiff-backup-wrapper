@@ -1,0 +1,40 @@
+#!/bin/dash
+
+#    notify-send-from-root: Allows to use notify-send as root by sending the notifications to all currently logged in users
+#    Copyright (C) 2021 github.com/desseim
+#
+#    This program is free software; you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation; either version 2 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License along
+#    with this program; if not, write to the Free Software Foundation, Inc.,
+#    51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+
+
+# ref.: <https://stackoverflow.com/a/49533938> for the base idea (adapted to support multiple user sessions, use loginctl for stronger value fetching, and POSIX compliant for dash)
+
+notify_send_from_root () {
+    local seats
+    seats=$(loginctl list-seats --no-legend)
+
+    echo "${seats}" | while read -r seat _ ; do  # foreach seat
+        local active_session
+        active_session=$(loginctl show-seat "${seat}" -p ActiveSession --value)
+
+        local user_name
+        local user_id
+        local display
+        user_name=$(loginctl show-session "${active_session}" -p Name --value)
+        user_id=$(loginctl show-session "${active_session}" -p User --value)
+        display=$(loginctl show-session "${active_session}" -p Display --value)
+
+        timeout 1 sudo -u "${user_name}" XAUTHORITY="/home/${user_name}/.Xauthority" DISPLAY="${display}" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${user_id}/bus" notify-send "${@}"  # run with a timeout because notify-send would hang until the session becomes active if used with a non-active one (which shouldn't be the case as we've specifically looked for the active session, but better be safe)
+    done
+}

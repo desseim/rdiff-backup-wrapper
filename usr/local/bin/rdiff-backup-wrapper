@@ -1,0 +1,240 @@
+#!/bin/dash
+
+#    rdiff-backup-wrapper: Wraps rdiff-backup calls with systemd unit commands.
+#    Copyright (C) 2021 github.com/desseim
+#
+#    This program is free software; you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation; either version 2 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License along
+#    with this program; if not, write to the Free Software Foundation, Inc.,
+#    51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+
+
+. /usr/local/sbin/notify-send-from-root
+
+SCRIPT_NAME="$(basename "${0}")"
+
+LOG_FACILITY="local7"
+LOG_TAG="${SCRIPT_NAME}"
+
+SYSTEMD_ERR_NOTIFY_MESSAGE_PLACEHOLDER_VAR="__ERR_NOTIFY_MESSAGE_PLACEHOLDER__"
+SYSTEMD_ERR_NOTIFY_MESSAGE_PLACEHOLDER="\${${SYSTEMD_ERR_NOTIFY_MESSAGE_PLACEHOLDER_VAR}}"
+
+log_information () {
+    _log_message "info" "$@"
+}
+
+log_error () {
+    _log_message "err" "$@" 
+    _echo_error "$@"
+}
+
+_log_message () {
+    local log_level="$1"
+    shift 1
+    local message="$*"
+
+    logger -t "${LOG_TAG}" -i -p "${LOG_FACILITY}.${log_level}" "${backup_label:+<$backup_label> }${message}"
+}
+
+_echo_error () {
+    printf "%s\n" "$*" >&2
+}
+
+run_systemd_units () {
+    local systemd_err_delimiter=", "
+    local systemd_err_units
+    local systemd_failed_units
+
+    local systemd_action="$1"
+    local systemd_units="$2"
+    local err_notify_title="$3"
+    local err_notify_message_raw="$4"
+    local err_notify_icon="$5"
+
+    local remaining_systemd_units="${systemd_units}"
+    while [ -n "${remaining_systemd_units}" ] ; do
+        local systemd_unit="${remaining_systemd_units%%,*}"
+
+        # iteration
+        remaining_systemd_units="${remaining_systemd_units#*,}"
+        [ "${systemd_unit}" = "${remaining_systemd_units}" ] && remaining_systemd_units=""
+
+        # action
+        log_information "Performing \"${systemd_action}\" action on ${systemd_unit} systemd unit (remaining: ${remaining_systemd_units:-<none>})"
+
+        systemctl --quiet "${systemd_action}" "${systemd_unit}" || systemd_err_units="${systemd_err_units}${systemd_unit}${systemd_err_delimiter}"
+        systemctl --quiet is-failed "${systemd_unit}" && systemd_failed_units="${systemd_failed_units}${systemd_unit}${systemd_err_delimiter}"
+    done
+
+    systemd_err_units="${systemd_err_units%%${systemd_err_delimiter}}"
+    systemd_failed_units="${systemd_failed_units%%${systemd_err_delimiter}}"
+
+    local res=0
+    if [ -n "${systemd_err_units}" ]; then
+        log_error "Systemd \"${systemd_action}\" action failed for following unit(s): ${systemd_err_units}"
+
+        err_notify_message=$(echo "${err_notify_message_raw}" | eval "${SYSTEMD_ERR_NOTIFY_MESSAGE_PLACEHOLDER_VAR}"=\""${systemd_err_units}"\" envsubst)
+        notify_send_from_root "${err_notify_title}" "${err_notify_message}" --icon="${err_notify_icon}"
+
+        res=1
+    fi
+    if [ -n "${systemd_failed_units}" ]; then
+        log_error "Following systemd unit(s) left in failed state after backup attempt: ${systemd_err_units}"
+
+        notify_send_from_root "Failed systemd unit" "Following systemd units are left in failed state after last backup attempt: ${systemd_failed_units}" --icon=dialog-information
+
+        res=1
+    fi
+    return ${res}
+}
+
+
+### Arguments processing
+
+usage () {
+    echo "Usage: ${SCRIPT_NAME} [ --prerun systemd-unit1[,systemd-unit2,...] ]
+                           [ --postrun systemd-unit3[,systemd-unit1,...] ])
+                           [ -l|--label backup_label ]
+                           --src /path/to/backup_source
+                           --dst /path/to/backup_destination
+                           [ -r|--remove-backup-older-than rdiff-backup_time_interval ]
+                           -- [ rdiff-backup options [...] ]"
+}
+
+arguments=$(getopt -s sh -n "${SCRIPT_NAME}" -l prerun:,postrun:,label:,src:,dst:,remove-backup-older-than: -o "l:r:" -- "${@}")
+getopt_res=$?
+if [ ${getopt_res} -ne 0 ]; then
+    # Argument parsing error
+    if [ ${getopt_res} -eq 1 ]; then usage; else _echo_error "Unexpected return value from getopt (${getopt_res}) ; this is a bug."; fi
+    exit 2
+fi
+eval set -- "${arguments}"
+
+unset systemd_start_units
+unset systemd_stop_units
+unset backup_label
+unset rdiff_backup_src
+unset rdiff_backup_dst
+unset rdiff_backup_remove_older_than
+while true
+do
+    case "${1}" in
+        --prerun) systemd_start_units="${2}" ; shift 2 ;;
+        --postrun) systemd_stop_units="${2}" ; shift 2 ;;
+        --label|-l) backup_label="${2}" ; shift 2 ;;
+        --src) rdiff_backup_src="${2}" ; shift 2 ;;
+        --dst) rdiff_backup_dst="${2}" ; shift 2 ;;
+        --remove-backup-older-than|-r) rdiff_backup_remove_older_than="${2}" ; shift 2 ;;
+        --) shift ;
+            # remaining parameters are the ones to be forwarded later to `rdiff-backup`
+            # in order to retain correct parameter splitting, we leave them in $@ and don't assign them to a variable
+            # for example, if we had 2 parameters "a    bc" and "d e f", assigning them to a variable its value would become "a    bc d e f" and information about their split in 2 "a    bc" and "d e f" parameters would be lost and couldn't be passed onto `rdiff-backup` ; "$@" on the other hand functions like a bash array and keeps such information (cf. <http://mywiki.wooledge.org/BashFAQ/050#I.27m_constructing_a_command_based_on_information_that_is_only_known_at_run_time>)
+            set -- "${@}"
+            break
+            ;;
+        *) _echo_error "Unexpected option: ${1} ; this is a bug" ; exit 3 ;;
+    esac
+done
+
+## Validate required arguments
+
+if [ -z "${rdiff_backup_src}" ] || [ -z "${rdiff_backup_dst}" ]; then
+    _echo_error "Missing required source or destination parameter"
+    usage
+    exit 2
+fi
+
+### Main
+
+run_systemd_pre () {
+    local start_units="${1}"
+    [ "${start_units}" ] && { run_systemd_units start "${start_units}" "Pre-backup error${backup_label:+ (\"${backup_label}\")}" "The following systemd unit(s) couldn't be started before backing up: ${SYSTEMD_ERR_NOTIFY_MESSAGE_PLACEHOLDER} ; check journalctl for details" drive-harddisk || return $? ; }
+    return 0
+}
+
+run_systemd_post () {
+    local stop_units="${1}"
+    [ "${stop_units}" ] && { run_systemd_units stop "${stop_units}" "Post-backup error${backup_label:+ (\"${backup_label}\")}" "The following systemd unit(s) couldn't be stopped after backing up: ${SYSTEMD_ERR_NOTIFY_MESSAGE_PLACEHOLDER} ; check journalctl for details" drive-harddisk || return $? ; }
+    return 0
+}
+
+exit_script () {
+    local return_exit_code=${1:-0}  # if exit code parameter is not set, we make it 0
+
+    run_systemd_post "${systemd_stop_units}"
+    local systemd_post_err=$?
+
+    [ "${return_exit_code}" -eq 0 ] && return_exit_code="${systemd_post_err}"
+    exit ${return_exit_code}
+}
+
+trap 'exit_script $?' EXIT
+
+unset res_pre_backup
+unset res_backup
+unset res_backup_cleanup
+unset backup_err_msg
+unset backup_cleanup_err_msg
+unset backup_cleanup_output
+
+# Pre backup
+
+run_systemd_pre "${systemd_start_units}"
+res_pre_backup=$?
+
+if [ "${res_pre_backup}" -ne 0 ]; then  # error during pre-backup
+    backup_err_msg="An error occurred starting services before backing up ; backup aborted"
+
+    log_error "${backup_label:+Backup \"${backup_label}\": }${backup_err_msg}"
+    notify_send_from_root "Backup error${backup_label:+ (\"${backup_label}\")}" "${backup_err_msg}" --icon="dialog-error"
+
+else
+    # Perform actual backup
+
+    log_information "Backing up ${rdiff_backup_src} to ${rdiff_backup_dst} with parameters \"${*}\""
+
+    rdiff-backup "${@}" "${rdiff_backup_src}" "${rdiff_backup_dst}"
+    res_backup=$?
+
+    if [ ${res_backup} -ne 0 ]; then
+        # Backup errors handling
+        backup_err_msg="An error occurred during backup ; rdiff-backup returned ${res_backup}."
+        log_error "${backup_label:+Backup \"${backup_label}\": }${backup_err_msg}"
+        notify_send_from_root "Backup error${backup_label:+ (\"${backup_label}\")}" "${backup_err_msg}" --icon="dialog-error"
+    fi
+
+    if [ -n "${rdiff_backup_remove_older_than}" ]; then
+        # Remove old backup increments
+
+        log_information "Removing backups older than \"${rdiff_backup_remove_older_than}\" in ${rdiff_backup_dst}"
+
+        backup_cleanup_output="$(rdiff-backup --remove-older-than "${rdiff_backup_remove_older_than}" --force "${rdiff_backup_dst}")"
+        res_backup_cleanup=$?
+
+        [ -n "${backup_cleanup_output}" ] && log_information "${backup_cleanup_output}"
+
+        if [ ${res_backup_cleanup} -ne 0 ]; then
+            # Backup removal error handling
+            backup_cleanup_err_msg="An error occurred removing older backup increments ; rdiff-backup returned ${res_backup_cleanup}"
+            log_error "${backup_label:+Backup \"${backup_label}\": }${backup_cleanup_err_msg}"
+            notify_send_from_root "Backup cleanup error${backup_label:+ (\"${backup_label}\")}" "${backup_cleanup_err_msg}" --icon=dialog-error
+        fi
+    fi
+
+fi
+
+# set `res_backup` to the first non-zero result value, otherwise 0:
+if [ ${res_pre_backup} -ne 0 ]; then res_backup="${res_pre_backup}";
+elif [ ${res_backup:=0} -eq 0 ] && [ ${res_backup_cleanup:-0} -ne 0 ]; then res_backup="${res_backup_cleanup}";
+fi
+
+exit "${res_backup}"  # runs EXIT signal trap handling routine defined above

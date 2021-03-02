@@ -21,7 +21,7 @@
 BACKUP_BIN="/usr/local/bin/rdiff-backup-wrapper"
 
 LOCK_TIMEOUT=600
-LOCK_FILE_DIR="/tmp"
+LOCK_FILE_DIR="/var/lock"
 CRON_SCRIPT_NAME="$(basename "${0}")"
 
 set -e

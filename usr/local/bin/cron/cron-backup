@@ -78,7 +78,7 @@ if [ -z "${cron_task_id}" ]; then
     usage
     exit 2
 fi
-lock_file_path="${LOCK_FILE_DIR}/.${CRON_SCRIPT_NAME}-${cron_task_id:?Cron task identifier not set -- this is a bug.}.lock"
+lock_file_path="${LOCK_FILE_DIR}/${CRON_SCRIPT_NAME}-${cron_task_id:?Cron task identifier not set -- this is a bug.}.lock"
 
 
 ### Backup command execution

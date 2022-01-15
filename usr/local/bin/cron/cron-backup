@@ -84,19 +84,20 @@ lock_file_path="${LOCK_FILE_DIR}/${CRON_SCRIPT_NAME}-${cron_task_id:?Cron task i
 ### Backup command execution
 
 unset NICE
-unset IONICE
+unset IONICE_CMD
+unset IONICE_OPT
 unset NOCACHE
 if [ -x /usr/bin/nice ]; then NICE="/usr/bin/nice"; fi
 if [ -x /usr/bin/ionice ] && /usr/bin/ionice -c3 true 2>/dev/null; then
-    IONICE="/usr/bin/ionice -c3"
+    IONICE_CMD="/usr/bin/ionice"
+    IONICE_OPT="-c3"
 fi
 if [ -x /usr/bin/nocache ]; then NOCACHE="/usr/bin/nocache"; fi
 
-# see <https://github.com/koalaman/shellcheck/wiki/SC2086#exceptions> on why to use parameter expansions with alternate value (`${...:+"$..."}`)
-# shellcheck disable=SC2086  # just for `IONICE`, because we would have to put `/usr/bin/ionice -c3` in a function otherwise in order to quote `IONICE`, but we can't pass a function as an argument to `flock`, so we have to let the shell split `IONICE` value ; it is quite OK as we control `IONICE` value, but not ideal
+# On why to use parameter expansions with alternate value (`${...:+"$..."}`) : these options should be unquoted, since `"$OPTION"` would pass en empty argument to `flock` when the `OPTION` variable is empty or null ; but `$OPTION`, despite being desirable, trigger a `shellcheck` SC2086 warning ; the alternative is to insert them quoted only when they aren't empty or null ; see <https://github.com/koalaman/shellcheck/wiki/SC2086#exceptions> for details
 flock --timeout "${LOCK_TIMEOUT}" "${lock_file_path}" \
     ${NOCACHE:+"$NOCACHE"} \
-    ${IONICE} \
+    ${IONICE_CMD:+"$IONICE_CMD" $IONICE_OPT} \
     ${NICE:+"$NICE"} \
     "${BACKUP_BIN}" "${@}"
 

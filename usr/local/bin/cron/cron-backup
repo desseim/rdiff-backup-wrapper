@@ -58,7 +58,7 @@ do
         --) shift ;
             # remaining parameters are the ones to be forwarded later to `rdiff-backup-wrapper`
             # in order to retain correct parameter splitting, we leave them in $@ and don't assign them to a variable
-            # for example, if we had 2 parameters "a    bc" and "d e f", assigning them to a variable its value would become "a    bc d e f" and information about their split in 2 "a    bc" and "d e f" parameters would be lost and couldn't be passed onto `rdiff-ba
+            # for example, if we had 2 parameters "a    bc" and "d e f", assigning them to a variable its value would become "a    bc d e f" and information about their split in 2 "a    bc" and "d e f" parameters would be lost and couldn't be passed onto `rdiff-backup` ; "$@" on the other hand functions like a bash array and keeps such information (cf. <http://mywiki.wooledge.org/BashFAQ/050#I.27m_constructing_a_command_based_on_information_that_is_only_known_at_run_time>)
             set -- "${@}"
             break
             ;;

@@ -66,3 +66,7 @@ Or as a cron job, for example with the following command:
 ```
 /usr/local/bin/cron/cron-backup --identifier system -- --prerun systemd-cryptsetup@backupsystem,mnt-backup-system.mount --postrun mnt-backup-system.mount,systemd-cryptsetup@backupsystem --src / --dst /mnt/backup/system/ --label "System backup" -r 1M -- --include-globbing-filelist /usr/local/etc/rdiff-backup/system_backup_filelist
 ```
+
+Other environments
+==================
+[`rdiff-backup-wrapper-win`](https://github.com/desseim/rdiff-backup-wrapper-win) is the equivalent project for Windows environments, written in PowerShell.
